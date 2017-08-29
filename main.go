@@ -6,6 +6,7 @@ import (
 	"flag"
 	"log"
 	"os"
+	"strings"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -34,15 +35,54 @@ var (
 
 ////////////////////////////////////////////////////////////////////////////////
 
+type cmdFn func(args []string) error
+
+func initFunc(args []string) error {
+	log.Printf("init: %#v\n", args)
+	return nil
+}
+
+func startFunc(args []string) error {
+	log.Printf("start: %#v\n", args)
+	return nil
+}
+
+func checkpointFunc(args []string) error {
+	log.Printf("checkpoint: %#v\n", args)
+	return nil
+}
+
+func endFunc(args []string) error {
+	log.Printf("end: %#v\n", args)
+	return nil
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+var fnMap = map[string]cmdFn{
+	"init":       initFunc,
+	"start":      startFunc,
+	"checkpoint": checkpointFunc,
+	"end":        endFunc,
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 func main() {
 	args := flag.Args()
-
 	if CLI.version {
 		log.Printf("%s\n", version)
 	} else if CLI.help || len(args) == 0 {
 		log.Printf("%s\n", usage)
 	} else {
-		log.Printf("Got args: %#v\n", args)
+		cmd, args := strings.ToLower(args[0]), args[1:]
+		if fn, ok := fnMap[cmd]; ok {
+			if err := fn(args); err != nil {
+				log.Fatalf("%s command failed: %s\n", cmd, err.Error())
+			}
+		} else {
+			log.Fatalf("Unknown command! %s\n", usage)
+		}
 	}
 }
 
@@ -53,11 +93,9 @@ func init() {
 	log.SetFlags(0)
 	log.SetOutput(os.Stdout)
 
-	flag.BoolVar(&CLI.version, "version", false, "print the application version")
-	flag.BoolVar(&CLI.version, "v", false, "print the application version (short)")
-	flag.BoolVar(&CLI.help, "help", false, "print the application help")
-	flag.BoolVar(&CLI.help, "h", false, "print the application help (short)")
+	flag.BoolVar(&CLI.version, "version", false, "print the version")
+	flag.BoolVar(&CLI.version, "v", false, "print the version (short)")
+	flag.BoolVar(&CLI.help, "help", false, "print help")
+	flag.BoolVar(&CLI.help, "h", false, "print help (short)")
 	flag.Parse()
 }
-
-////////////////////////////////////////////////////////////////////////////////

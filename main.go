@@ -6,10 +6,13 @@ import (
 	"flag"
 	"log"
 	"os"
+	"path"
 	"strings"
 
 	"gopkg.in/src-d/go-git.v4"
-	"gopkg.in/src-d/go-git.v4/plumbing/object"
+	// "gopkg.in/src-d/go-git.v4/plumbing/object"
+
+	"github.com/sabhiram/timecard/timecard"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -31,42 +34,54 @@ Valid Timecard commands include:
 
 var (
 	CLI = struct {
-		version bool // print application version
-		help    bool // print application usages
+		version bool   // print application version
+		help    bool   // print application usages
+		cwd     string // application's working directory
 	}{}
 )
+
+////////////////////////////////////////////////////////////////////////////////
+
+func isGitPath(dp string) bool {
+	if _, err := git.PlainOpen(dp); err != nil {
+		return false
+	}
+	return true
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
 type cmdFn func(args []string) error
 
 func initFunc(args []string) error {
-	log.Printf("init: %#v\n", args)
-	repo, err := git.PlainOpen(".")
-	if err != nil {
-		return err
+	if !isGitPath(CLI.cwd) {
+		log.Fatalf("Error: Could not find a valid git repository at %s. Did you \"git init\"?\n", CLI.cwd)
 	}
 
-	ref, err := repo.Head()
-	if err != nil {
-		return err
-	}
-
-	log.Printf("Current ref: %#v\n", ref.Hash().String())
-
-	ci, err := repo.Log(&git.LogOptions{From: ref.Hash()})
-	if err != nil {
-		return err
-	}
-
-	return ci.ForEach(func(c *object.Commit) error {
-		log.Printf("COMMIT: %#v\n", c)
+	tcfp := path.Join(CLI.cwd, timecardFile)
+	if _, err := os.Stat(tcfp); os.IsNotExist(err) {
+		// Create a default timecard for this project
+		if _, err := timecard.Init(tcfp); err != nil {
+			return err
+		}
+		log.Printf("Initialized new timecard for %s in %s.", "user", tcfp)
 		return nil
-	})
+	}
+
+	// .timecard file already exists, do nothing.
+	log.Printf("Timecard already setup for %s, use --force to re-initialize.\n", tcfp)
+	return nil
 }
 
 func startFunc(args []string) error {
-	log.Printf("start: %#v\n", args)
+	tcfp := path.Join(CLI.cwd, timecardFile)
+	tc, err := timecard.Load(tcfp)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("GOT TIMECARD: %#v\n", tc)
+
 	return nil
 }
 
@@ -121,4 +136,10 @@ func init() {
 	flag.BoolVar(&CLI.help, "help", false, "print help")
 	flag.BoolVar(&CLI.help, "h", false, "print help (short)")
 	flag.Parse()
+
+	var err error
+	CLI.cwd, err = os.Getwd()
+	if err != nil {
+		log.Fatalf("Unable to query current working dir, %s\n", err.Error())
+	}
 }

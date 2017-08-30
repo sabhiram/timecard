@@ -24,7 +24,7 @@ Error: Could not find a valid git repository at /current/path. Did you "git init
 $ git init
 Initialized empty Git repository in /current/path/.git/
 $ timecard init
-Initialized new timecard for <gituser> in /current/path/.timecard.
+Initialized new timecard for <gituser> in /current/path/.timecard.a
 ``` 
 
 ## Getting cute with git-hooks:
@@ -35,12 +35,17 @@ Initialized new timecard for <gituser> in /current/path/.timecard.
 
 The very first line of the file is special, and is used to store a binary blob that is specific to the timecard application. Each subsequent line in this file represents a single commit hash with a start time, end time and the times at which various checkpoints might have been taken.
 
+An empty `.timecard` file will contain just a header:
+```
+738CEF2B8EB3E5391C44D2472CD25691
+```
+
 A `.timecard` file with three commits that have been made would look like:
 ```
 CD25691738CEF2B8EB3E5391C44D2472
 start0,end0,commithash0
 start1,end1,commithash1
-start2,end2,CURRENT_COMMIT
+start2,end2,
 ```
 
 And once `timecard start` has executed:
@@ -49,7 +54,7 @@ And once `timecard start` has executed:
 start0,end0,commithash0
 start1,end1,commithash1
 start2,end2,commithash2
-start3,PENDING
+start3,
 ```
 
 And once `git commit` has run:
@@ -58,7 +63,5 @@ And once `git commit` has run:
 start0,end0,commithash0
 start1,end1,commithash1
 start2,end2,commithash2
-start3,end3,CURRENT_COMMIT
+start3,end3,
 ```
-
-

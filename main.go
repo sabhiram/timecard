@@ -7,6 +7,9 @@ import (
 	"log"
 	"os"
 	"strings"
+
+	"gopkg.in/src-d/go-git.v4"
+	"gopkg.in/src-d/go-git.v4/plumbing/object"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -39,7 +42,27 @@ type cmdFn func(args []string) error
 
 func initFunc(args []string) error {
 	log.Printf("init: %#v\n", args)
-	return nil
+	repo, err := git.PlainOpen(".")
+	if err != nil {
+		return err
+	}
+
+	ref, err := repo.Head()
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Current ref: %#v\n", ref.Hash().String())
+
+	ci, err := repo.Log(&git.LogOptions{From: ref.Hash()})
+	if err != nil {
+		return err
+	}
+
+	return ci.ForEach(func(c *object.Commit) error {
+		log.Printf("COMMIT: %#v\n", c)
+		return nil
+	})
 }
 
 func startFunc(args []string) error {

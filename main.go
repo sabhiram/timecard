@@ -9,9 +9,7 @@ import (
 	"path"
 	"strings"
 
-	"gopkg.in/src-d/go-git.v4"
-	// "gopkg.in/src-d/go-git.v4/plumbing/object"
-
+	"github.com/sabhiram/timecard/git"
 	"github.com/sabhiram/timecard/timecard"
 )
 
@@ -42,26 +40,18 @@ var (
 
 ////////////////////////////////////////////////////////////////////////////////
 
-func isGitPath(dp string) bool {
-	if _, err := git.PlainOpen(dp); err != nil {
-		return false
-	}
-	return true
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
 type cmdFn func(args []string) error
 
 func initFunc(args []string) error {
-	if !isGitPath(CLI.cwd) {
+	g, err := git.New(CLI.cwd)
+	if err != nil {
 		log.Fatalf("Error: Could not find a valid git repository at %s. Did you \"git init\"?\n", CLI.cwd)
 	}
 
 	tcfp := path.Join(CLI.cwd, timecardFile)
 	if _, err := os.Stat(tcfp); os.IsNotExist(err) {
 		// Create a default timecard for this project
-		if _, err := timecard.Init(tcfp); err != nil {
+		if _, err := timecard.Init(g, tcfp); err != nil {
 			return err
 		}
 		log.Printf("Initialized new timecard for %s in %s.", "user", tcfp)
@@ -74,15 +64,17 @@ func initFunc(args []string) error {
 }
 
 func startFunc(args []string) error {
+	g, err := git.New(CLI.cwd)
+	if err != nil {
+		log.Fatalf("Error: Could not find a valid git repository at %s. Did you \"git init\"?\n", CLI.cwd)
+	}
+
 	tcfp := path.Join(CLI.cwd, timecardFile)
-	tc, err := timecard.Load(tcfp)
+	tc, err := timecard.Load(g, tcfp)
 	if err != nil {
 		return err
 	}
-
-	log.Printf("GOT TIMECARD: %#v\n", tc)
-
-	return nil
+	return tc.Start()
 }
 
 func checkpointFunc(args []string) error {
@@ -91,8 +83,17 @@ func checkpointFunc(args []string) error {
 }
 
 func endFunc(args []string) error {
-	log.Printf("end: %#v\n", args)
-	return nil
+	g, err := git.New(CLI.cwd)
+	if err != nil {
+		log.Fatalf("Error: Could not find a valid git repository at %s. Did you \"git init\"?\n", CLI.cwd)
+	}
+
+	tcfp := path.Join(CLI.cwd, timecardFile)
+	tc, err := timecard.Load(g, tcfp)
+	if err != nil {
+		return err
+	}
+	return tc.End()
 }
 
 ////////////////////////////////////////////////////////////////////////////////

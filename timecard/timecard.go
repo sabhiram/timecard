@@ -12,16 +12,12 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/sabhiram/timecard/git"
 )
 
 ////////////////////////////////////////////////////////////////////////////////
-
-const (
-	cStateUnknown  = iota
-	cStatePending  = iota // Waiting for timecard end
-	cStateRecorded = iota // Hash has been recorded
-	cStateLatest   = iota
-)
 
 const (
 	v1HeaderSize = 9 // bytes
@@ -32,7 +28,7 @@ const (
 type Header struct {
 	Size    byte   // Size of the timecard header
 	Version uint32 // 32 bit hex version 8:Major 8:Minor 16:Patch
-	Count   uint32 // 32 bit count of number of timecard entries
+	Count   int32  // 32 bit count of number of timecard entries
 }
 
 func (h *Header) Unmarshal(data []byte) error {
@@ -56,6 +52,13 @@ func (h *Header) Marshal() ([]byte, error) {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+
+const (
+	cStateUnknown = iota // Invalid / init state
+	cStatePending = iota // Waiting for timecard end
+	cStatePartial = iota // Got timecard end, waiting for hash
+	cStateHashed  = iota // Hash has been recorded
+)
 
 // Entry represents a single entry in a timecard.  NOTE: We are currently
 // ignoring checkpoints in the entries.
@@ -103,9 +106,9 @@ func (e *Entry) Unmarshal(data []byte) error {
 		e.Start = start
 		e.End = end
 		e.Hash = items[2]
-		e.State = cStateRecorded
+		e.State = cStateHashed
 		if len(e.Hash) == 0 {
-			e.State = cStateLatest
+			e.State = cStatePartial
 		}
 		return nil
 	}
@@ -131,6 +134,36 @@ type Timecard struct {
 	Path    string   // path to file
 	Header  *Header  // Timecard's header
 	Entries []*Entry // Slice of timecard entries
+	repo    *git.Git
+}
+
+func Init(r *git.Git, fp string) (*Timecard, error) {
+	tc := &Timecard{
+		Path: fp,
+		Header: &Header{
+			Size:    v1HeaderSize, // Fixed v1 header size
+			Version: 0x00000001,   // 0.0.0001
+			Count:   0,            // no entries as of now
+		},
+		Entries: []*Entry{},
+		repo:    r,
+	}
+	return tc, tc.Flush()
+}
+
+func Load(r *git.Git, fp string) (*Timecard, error) {
+	bs, err := ioutil.ReadFile(fp)
+	if err != nil {
+		return nil, err
+	}
+
+	tc := &Timecard{
+		Path:    fp,
+		Header:  &Header{},
+		Entries: []*Entry{},
+		repo:    r,
+	}
+	return tc, tc.Unmarshal(bs)
 }
 
 // Unmarshal converts a file blob into a timecard instance `tc`.
@@ -180,36 +213,82 @@ func (tc *Timecard) Flush() error {
 		return err
 	}
 	contents = append(contents, '\n')
-	return ioutil.WriteFile(tc.Path, contents, 0755)
+	if err := ioutil.WriteFile(tc.Path, contents, 0755); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-////////////////////////////////////////////////////////////////////////////////
-
-func Init(fp string) (*Timecard, error) {
-	tc := &Timecard{
-		Path: fp,
-		Header: &Header{
-			Size:    v1HeaderSize, // Fixed v1 header size
-			Version: 0x00000001,   // 0.0.0001
-			Count:   0,            // no entries as of now
-		},
-		Entries: []*Entry{},
+// Start starts or re-starts the current entry. This includes figuring out the
+// current commit hash so it can be attributed to the last commit.
+func (tc *Timecard) Start() error {
+	if int(tc.Header.Count) != len(tc.Entries) {
+		panic("header count and entry length mismatch")
 	}
-	return tc, tc.Flush()
+
+	appendNewEntryFn := func(tc *Timecard, t int64) error {
+		tc.Header.Count += 1
+		tc.Entries = append(tc.Entries, &Entry{
+			Start: t,
+			State: cStatePending,
+		})
+		return tc.Flush()
+	}
+
+	// If we have no entries, we make a new one with just a start time.
+	if tc.Header.Count == 0 {
+		return appendNewEntryFn(tc, time.Now().Unix())
+	}
+
+	// Grab the last entry, if it is complete - make a new one.  If it is
+	// pending - update the current one's start time.
+	lastIdx := tc.Header.Count - 1
+	switch tc.Entries[lastIdx].State {
+	case cStatePending:
+		// Pending entries should just be updated with a new start time.
+		tc.Entries[lastIdx].Start = time.Now().Unix()
+		return tc.Flush()
+	case cStatePartial:
+		// Latest entry is partial, figure out the right commit hash for it
+		// and make a new entry.
+		headHash, err := tc.repo.GetCurrentHash()
+		if err != nil {
+			return err
+		}
+		tc.Entries[lastIdx].Hash = headHash
+		tc.Entries[lastIdx].State = cStateHashed
+		return appendNewEntryFn(tc, time.Now().Unix())
+	case cStateHashed:
+		// Latest entry is recorded, make a new entry.
+		return appendNewEntryFn(tc, time.Now().Unix())
+	}
+	return nil
 }
 
-func Load(fp string) (*Timecard, error) {
-	bs, err := ioutil.ReadFile(fp)
-	if err != nil {
-		return nil, err
+// End closes a timecard entry.
+func (tc *Timecard) End() error {
+	if int(tc.Header.Count) != len(tc.Entries) {
+		panic("header count and entry length mismatch")
 	}
 
-	tc := &Timecard{
-		Path:    fp,
-		Header:  &Header{},
-		Entries: []*Entry{},
+	// If we have no entries, throw an error.
+	if tc.Header.Count == 0 {
+		return errors.New("mismatched \"timecard end\" without \"timecard start\"")
 	}
-	return tc, tc.Unmarshal(bs)
+
+	lastIdx := tc.Header.Count - 1
+	log.Printf("Last entry: %#v\n", tc.Entries[lastIdx])
+	switch tc.Entries[lastIdx].State {
+	case cStatePending:
+		// Pending entries get promoted to partial
+		tc.Entries[lastIdx].End = time.Now().Unix()
+		tc.Entries[lastIdx].State = cStatePartial
+		return tc.Flush()
+	case cStatePartial:
+		return errors.New("timecard entry already closed")
+	}
+	return errors.New("mismatched \"timecard end\" without \"timecard start\"")
 }
 
 ////////////////////////////////////////////////////////////////////////////////
